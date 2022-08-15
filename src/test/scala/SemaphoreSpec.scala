@@ -1,7 +1,8 @@
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
-import scala.collection.mutable
+import java.time.Duration
+
 
 class SemaphoreSpec extends AnyWordSpec with Matchers {
 
@@ -9,27 +10,28 @@ class SemaphoreSpec extends AnyWordSpec with Matchers {
     private val mutex = new Semaphore(1)
     private val empty = new Semaphore(2)
     private val full = new Semaphore(0)
-    @volatile private var items = mutable.Seq.empty[Int]
+    @volatile private var items = Seq.empty[Int]
+    private val timeout = Duration.ofMillis(10)
 
     def produce(i: Int): Unit = {
-      empty.downNanos()
-      mutex.downNanos()
+      empty.down(timeout.toNanos)
+      mutex.down(timeout.toNanos)
       items :+= i
-//      println(s"Produced $i")
+      println(s"Produced $i")
       mutex.up()
       full.up()
     }
 
     def consume(): Option[Int] = {
       try {
-        full.downNanos(1 * Math.pow(10, 9).toLong)
-        mutex.downNanos()
+        full.down(timeout.toNanos)
+        mutex.down(timeout.toNanos)
         if (items.isEmpty) {
           None
         } else {
           val result = items.head
           items = items.drop(1)
-//          println(s"${Thread.currentThread()}: Consumed $result")
+          println(s"${Thread.currentThread()}: Consumed $result")
           Some(result)
         }
       } finally {
@@ -43,7 +45,7 @@ class SemaphoreSpec extends AnyWordSpec with Matchers {
     val mutex = new Semaphore(1)
     var i = 0
     val n = 10000
-    var result = mutable.Seq.empty[Int]
+    var result = Seq.empty[Int]
   }
   "MySemaphore" when {
     "having 1 consumer and 1 producer" should {
@@ -55,7 +57,7 @@ class SemaphoreSpec extends AnyWordSpec with Matchers {
             m.produce(i)
           }
         }, "producer")
-        var result = mutable.Seq.empty[Int]
+        var result = Seq.empty[Int]
         val consumer = new Thread(() => {
           for (_ <- 1 to n) {
             m.consume() match {
@@ -209,7 +211,7 @@ class SemaphoreSpec extends AnyWordSpec with Matchers {
         val f = binarySemaphoreFixture
         val t = new Thread(() => {
           for (_ <- 1 to f.n) {
-            f.mutex.downNanos()
+            f.mutex.down(0)
             f.i += 1
             f.result :+= f.i
             f.mutex.up()
@@ -223,7 +225,7 @@ class SemaphoreSpec extends AnyWordSpec with Matchers {
         val f = binarySemaphoreFixture
         val t = new Thread(() => {
           for (_ <- 1 to f.n) {
-            f.mutex.downNanos()
+            f.mutex.down(0)
             f.i += 1
             f.result :+= f.i
             f.mutex.up()
@@ -231,7 +233,7 @@ class SemaphoreSpec extends AnyWordSpec with Matchers {
         })
         val t2 = new Thread(() => {
           for (_ <- 1 to f.n) {
-            f.mutex.downNanos()
+            f.mutex.down(0)
             f.i += 1
             f.result :+= f.i
             f.mutex.up()

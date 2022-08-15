@@ -1,50 +1,54 @@
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
+import com.typesafe.scalalogging.StrictLogging
+
 import java.util.concurrent.locks.LockSupport
-import scala.collection.mutable
 
-class Semaphore(n: Int) {
+class Semaphore(@volatile var count: Int) extends StrictLogging {
 
-  private val mutexCriticalSection: AtomicBoolean = new AtomicBoolean()
-  private val semaphore: AtomicInteger = new AtomicInteger(n)
-  private val mutexBlockedThreads: AtomicBoolean = new AtomicBoolean()
-  @volatile private var blockedThread: mutable.Seq[Thread] = mutable.Seq.empty
+  private val lock = new SpinLock
+  @volatile private var waiterList: Seq[Waiter] = Seq.empty
+
+  def down(nanos: Long): Unit = {
+    lock.lock()
+    if (count > 0) {
+      count -= 1
+      logger.info(s"Thread ${Thread.currentThread().getId} acquired the lock")
+      lock.unlock()
+    } else {
+      val localWaiter = Waiter(Thread.currentThread(), isUp = false)
+      waiterList :+= localWaiter
+      logger.info(s"Thread ${Thread.currentThread().getId} gets appended to the waiter list")
+      lock.unlock()
+      while (!localWaiter.isUp) {
+        if (nanos == 0) {
+          LockSupport.park()
+        } else {
+          val parkStartTime = System.nanoTime()
+          LockSupport.parkNanos(nanos)
+          if (System.nanoTime() - parkStartTime >= nanos) {
+            logger.info(s"Thread ${Thread.currentThread().getId} timed out for lock acquirement")
+            return
+          }
+        }
+
+      }
+      logger.info(s"Was waken up, thread ${Thread.currentThread().getId} acquired the lock")
+    }
+  }
 
   def up(): Unit = {
-    while (mutexCriticalSection.getAndSet(true)) {
-      // A thread has already entered the critical section
-      // Put the current thread to sleep
-    }
-//    println(s"Thread ${Thread.currentThread()} has entered the critical section")
-
-    if (semaphore.incrementAndGet() <= 0) {
-//      while (mutexBlockedThreads.getAndSet(true)) {
-//         Busy waiting
-//      }
-      val head = blockedThread.head
-      blockedThread = blockedThread.drop(1)
-//      mutexBlockedThreads.set(false)
-      LockSupport.unpark(head)
-      println(s"Unparked the thread $head")
-    }
-
-    mutexCriticalSection.set(false)
-  }
-
-  def downNanos(nanos: Long = 0): Unit = {
-    while (mutexCriticalSection.getAndSet(true)) {}
-//    println(s"Thread ${Thread.currentThread()} has entered the critical section")
-    if (semaphore.decrementAndGet() < 0) {
-//      while (mutexBlockedThreads.getAndSet(true)) {}
-      println(s"Parked the current thread ${Thread.currentThread()}")
-      blockedThread :+= Thread.currentThread()
-//      mutexBlockedThreads.set(false)
-      mutexCriticalSection.set(false)
-      if (nanos > 0)
-        LockSupport.parkNanos(nanos)
-      else
-        LockSupport.park()
+    lock.lock()
+    if (waiterList.nonEmpty) {
+      val waiter = waiterList.head
+      waiter.isUp = true
+      LockSupport.unpark(waiter.thread)
+      waiterList = waiterList.drop(1)
+      logger.info(s"Thread ${Thread.currentThread().getId} released the lock and woke up thread ${waiter.thread.getId}")
     } else {
-      mutexCriticalSection.set(false)
+      count += 1
+      logger.info(s"Thread ${Thread.currentThread().getId} released the lock")
     }
+    lock.unlock()
   }
 }
+
+case class Waiter(thread: Thread, @volatile var isUp: Boolean)
